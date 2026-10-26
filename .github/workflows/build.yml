@@ -1,33 +1,34 @@
 name: Build unsigned IPA
 
-# 为什么用 GitHub Actions 而不是 Codemagic：
-#   不需要注册任何新平台、不需要 API token，推代码就自动构建；
-#   公开仓库的 macOS 分钟数免费不限量，构建日志和产物我都能匿名拿到。
+# 设计要点（改过一版，上一版被取消了，日志没来得及提交）：
+#   · 不用 concurrency —— 上一版带 cancel-in-progress，疑似把正在跑的自己取消了
+#   · 编译步骤单独设超时 + continue-on-error，保证后面"提交日志"那步一定还会跑
+#   · 日志在编译后立刻提交回仓库（公开仓库我能匿名读，不需要 token）
+#     —— 这是"我能自己看到报错并自动迭代"的关键
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# 允许 workflow 自己把日志提交回仓库、并把 ipa 挂到 Release
 permissions:
   contents: write
-
-concurrency:
-  group: build-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: macos-14
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Show toolchain
         run: |
           xcodebuild -version
           sw_vers
+          df -h /
 
       - name: Install xcodegen
         run: |
@@ -54,43 +55,42 @@ jobs:
           ls Frameworks/Python.xcframework || true
 
       - name: Generate Xcode project
-        run: xcodegen generate
+        run: xcodegen generate 2>&1 | tee -a build.log
 
       - name: Build (unsigned)
         id: build
         continue-on-error: true
+        timeout-minutes: 30
         run: |
           set -o pipefail
           xcodebuild -project CarHeart.xcodeproj -scheme CarHeart \
             -configuration Release -sdk iphoneos \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            build 2>&1 | tee build.log
-          echo "exit=$?" >> "$GITHUB_OUTPUT"
+            build 2>&1 | tee -a build.log
+          echo "xcodebuild exit: $?"
 
-      - name: Upload build log as artifact
+      # 关键一步：立刻把日志提交回仓库，公开仓库我这边能匿名读到
+      - name: Publish build log into repo
+        if: always()
+        run: |
+          set -e
+          mkdir -p ci
+          [ -f build.log ] || echo "(没有 build.log)" > build.log
+          tail -c 300000 build.log > ci/build-log.txt
+          git config user.name "carheart-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add -f ci/build-log.txt
+          git commit -m "ci: build log [skip ci]" || echo "no change"
+          git push origin HEAD:main || echo "push failed"
+
+      - name: Upload log artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-log
           path: build.log
-
-      # 关键：把日志提交回仓库。
-      # 仓库是公开的，所以我能直接从 raw.githubusercontent 读到构建报错，
-      # 不需要任何 token —— 这是"全自动迭代"的关键。
-      - name: Publish build log into repo
-        if: always()
-        run: |
-          set -e
-          [ -f build.log ] || echo "(no log)" > build.log
-          tail -c 200000 build.log > ci/build-log.txt 2>/dev/null || {
-            mkdir -p ci && tail -c 200000 build.log > ci/build-log.txt
-          }
-          git config user.name "carheart-ci"
-          git config user.email "ci@users.noreply.github.com"
-          git add ci/build-log.txt
-          git commit -m "ci: build log [skip ci]" || echo "no change"
-          git push || echo "push skipped"
+          if-no-files-found: ignore
 
       - name: Package unsigned IPA
         if: steps.build.outcome == 'success'
