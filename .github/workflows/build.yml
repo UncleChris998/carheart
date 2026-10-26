@@ -1,0 +1,115 @@
+name: Build unsigned IPA
+
+# 为什么用 GitHub Actions 而不是 Codemagic：
+#   不需要注册任何新平台、不需要 API token，推代码就自动构建；
+#   公开仓库的 macOS 分钟数免费不限量，构建日志和产物我都能匿名拿到。
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 允许 workflow 自己把日志提交回仓库、并把 ipa 挂到 Release
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          sw_vers
+
+      - name: Install xcodegen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Fetch Python-Apple-support
+        run: |
+          set -e
+          URL="https://github.com/beeware/Python-Apple-support/releases/download/3.12-b13/Python-3.12-iOS-support.b13.tar.gz"
+          echo "downloading $URL"
+          curl -L --fail -o py.tar.gz "$URL"
+          mkdir -p /tmp/py && tar xzf py.tar.gz -C /tmp/py
+          echo "== 解出来的结构 =="
+          find /tmp/py -maxdepth 2 | head -40
+          mkdir -p Frameworks Resources
+          XC=$(find /tmp/py -maxdepth 2 -name "Python.xcframework" | head -1)
+          STD=$(find /tmp/py -maxdepth 2 -name "python-stdlib" | head -1)
+          echo "xcframework = $XC"
+          echo "stdlib      = $STD"
+          [ -n "$XC" ]  && cp -R "$XC"  Frameworks/
+          [ -n "$STD" ] && cp -R "$STD" Resources/
+          echo "== xcframework 切片 =="
+          ls Frameworks/Python.xcframework || true
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build (unsigned)
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          xcodebuild -project CarHeart.xcodeproj -scheme CarHeart \
+            -configuration Release -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log
+          echo "exit=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build log as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+
+      # 关键：把日志提交回仓库。
+      # 仓库是公开的，所以我能直接从 raw.githubusercontent 读到构建报错，
+      # 不需要任何 token —— 这是"全自动迭代"的关键。
+      - name: Publish build log into repo
+        if: always()
+        run: |
+          set -e
+          [ -f build.log ] || echo "(no log)" > build.log
+          tail -c 200000 build.log > ci/build-log.txt 2>/dev/null || {
+            mkdir -p ci && tail -c 200000 build.log > ci/build-log.txt
+          }
+          git config user.name "carheart-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git add ci/build-log.txt
+          git commit -m "ci: build log [skip ci]" || echo "no change"
+          git push || echo "push skipped"
+
+      - name: Package unsigned IPA
+        if: steps.build.outcome == 'success'
+        run: |
+          set -e
+          APP=$(find build -name "CarHeart.app" -maxdepth 8 | head -1)
+          echo "app = $APP"
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry CarHeart-unsigned.ipa Payload
+          ls -lh CarHeart-unsigned.ipa
+
+      - name: Attach IPA to Release
+        if: steps.build.outcome == 'success'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: CarHeart build ${{ github.run_number }}
+          files: CarHeart-unsigned.ipa
+          body: |
+            未签名 IPA，给 AltStore 侧载用。
+            commit: ${{ github.sha }}
