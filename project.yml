@@ -1,0 +1,61 @@
+name: CarHeart
+options:
+  bundleIdPrefix: local.carheart
+  deploymentTarget:
+    iOS: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    # AltStore 免费签名：构建时完全不做签名，交给 AltServer 签
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    CODE_SIGN_IDENTITY: ""
+    ENABLE_BITCODE: "NO"
+
+targets:
+  CarHeart:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources
+        buildPhase: resources
+        # python 包整目录塞进 bundle
+        type: folder
+    info:
+      path: CarHeart-Info.plist
+      properties:
+        CFBundleDisplayName: 心石计划
+        CFBundleName: CarHeart
+        UILaunchScreen: {}
+        NSMicrophoneUsageDescription: 需要麦克风才能和它说话
+        NSLocalNetworkUsageDescription: 需要访问本机回环地址上的内置服务
+        UIBackgroundModes:
+          - audio
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiresFullScreen: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: local.carheart.app
+        SWIFT_VERSION: "5.0"
+        HEADER_SEARCH_PATHS:
+          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64/Headers"
+          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64-simulator/Headers"
+        SWIFT_OBJC_BRIDGING_HEADER: "Sources/Bridging-Header.h"
+        OTHER_LDFLAGS:
+          - "-framework"
+          - "Python"
+        LIBRARY_SEARCH_PATHS:
+          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64"
+          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64-simulator"
+    dependencies:
+      - framework: Frameworks/Python.xcframework
+        embed: true
+        codeSign: false

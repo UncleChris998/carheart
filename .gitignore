@@ -1,0 +1,16 @@
+# CI 里现场下载的东西，不进仓库
+Frameworks/
+Resources/python/
+Resources/python-stdlib/
+
+# 构建产物
+build/
+*.ipa
+*.app
+DerivedData/
+Payload/
+
+# 本机杂项
+.DS_Store
+*.pyc
+__pycache__/
