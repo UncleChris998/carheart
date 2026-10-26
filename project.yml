@@ -46,15 +46,13 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: local.carheart.app
         SWIFT_VERSION: "5.0"
         HEADER_SEARCH_PATHS:
-          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64/Headers"
-          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64-simulator/Headers"
+          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64/Python.framework/Headers"
         SWIFT_OBJC_BRIDGING_HEADER: "Sources/Bridging-Header.h"
         OTHER_LDFLAGS:
           - "-framework"
           - "Python"
         LIBRARY_SEARCH_PATHS:
           - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64"
-          - "$(SRCROOT)/Frameworks/Python.xcframework/ios-arm64-simulator"
     dependencies:
       - framework: Frameworks/Python.xcframework
         embed: true

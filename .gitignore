@@ -1,7 +1,9 @@
 # CI 里现场下载的东西，不进仓库
 Frameworks/
-Resources/python/
 Resources/python-stdlib/
+
+# 注意：Resources/python/ 要进仓库（0.54MB，43 个 .py），
+# 这样云端构建才能直接拿到 carheart 包，不用拷工作区。
 
 # 构建产物
 build/

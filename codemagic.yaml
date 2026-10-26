@@ -7,7 +7,7 @@ workflows:
       xcode: latest
       vars:
         PY_VER: "3.12"
-        PY_SUPPORT_TAG: "3.12-b4"
+        PY_SUPPORT_TAG: "3.12-b13"
     scripts:
       - name: Install tools
         script: |
@@ -17,24 +17,28 @@ workflows:
       - name: Fetch Python-Apple-support (iOS xcframework + stdlib)
         script: |
           set -e
-          mkdir -p Frameworks
-          URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_SUPPORT_TAG}/Python-${PY_VER}-iOS-support.b${PY_SUPPORT_TAG##*-b}.tar.gz"
+          NAME="Python-${PY_VER}-iOS-support.b13.tar.gz"
+          URL="https://github.com/beeware/Python-Apple-support/releases/download/${PY_SUPPORT_TAG}/${NAME}"
           echo "downloading $URL"
           curl -L --fail -o py.tar.gz "$URL"
-          tar xzf py.tar.gz -C /tmp
-          ls -la /tmp
-          # 把 xcframework 和 stdlib 放到工程期望的位置
-          cp -R /tmp/Python.xcframework Frameworks/ 2>/dev/null || cp -R /tmp/*/Python.xcframework Frameworks/
-          mkdir -p Resources
-          cp -R /tmp/python-stdlib Resources/python-stdlib 2>/dev/null || cp -R /tmp/*/python-stdlib Resources/python-stdlib
-          du -sh Frameworks/Python.xcframework Resources/python-stdlib
+          mkdir -p /tmp/py && tar xzf py.tar.gz -C /tmp/py
+          echo "== 解出来的结构 =="
+          find /tmp/py -maxdepth 2 | head -40
+          mkdir -p Frameworks Resources
+          XC=$(find /tmp/py -maxdepth 2 -name "Python.xcframework" | head -1)
+          STD=$(find /tmp/py -maxdepth 2 -name "python-stdlib" | head -1)
+          echo "xcframework = $XC"
+          echo "stdlib      = $STD"
+          [ -n "$XC" ]  && cp -R "$XC"  Frameworks/
+          [ -n "$STD" ] && cp -R "$STD" Resources/
+          echo "== xcframework 切片 =="
+          ls Frameworks/Python.xcframework || true
 
-      - name: Bundle carheart python package
+      - name: Check bundled python package
         script: |
           set -e
-          mkdir -p Resources/python
-          rsync -a --exclude '__pycache__' --exclude '*.pyc' \
-                ../car-heart/carheart Resources/python/
+          ls -la Resources/python/carheart | head -10
+          echo "py 文件数: $(find Resources/python -name '*.py' | wc -l)"
           du -sh Resources/python
 
       - name: Generate Xcode project

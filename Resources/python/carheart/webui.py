@@ -1,0 +1,1806 @@
+# -*- coding: utf-8 -*-
+"""手机 / 车里屏幕用的网页界面。
+
+为什么用网页而不是原生 App：
+  安卓浏览器 + PWA（加到主屏幕）= 独立图标、全屏、像原生应用，
+  但不需要 Android SDK、不需要编译、不需要签名、不需要 APK。
+  先把「在车里用它是什么感觉」验证掉，真要 APK 再用 TWA 套壳。
+
+自包含：不依赖任何外部 CDN，车里断网也能打开。
+"""
+import json
+
+PAGE = r"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0b1a24">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon.png">
+<link rel="icon" href="/icon.png">
+<title>心石计划</title>
+<style>
+:root{
+  --bg:#08131b; --bg2:#0d1f2b; --line:#1d3644;
+  --ink:#e8f2f7; --dim:#7f9aa8; --accent:#4fd1c5; --warn:#e8a33d;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  overscroll-behavior:none}
+#app{display:flex;flex-direction:column;height:100dvh;
+  padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+header{display:flex;align-items:center;gap:10px;padding:12px 16px;
+  border-bottom:1px solid var(--line);background:var(--bg2)}
+#dot{width:9px;height:9px;border-radius:50%;background:var(--dim);flex:none;
+  box-shadow:0 0 0 0 rgba(79,209,197,.6)}
+#dot.on{background:var(--accent);animation:pulse 2.6s infinite}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(79,209,197,.45)}70%{box-shadow:0 0 0 9px rgba(79,209,197,0)}100%{box-shadow:0 0 0 0 rgba(79,209,197,0)}}
+#who{font-size:15px;font-weight:600;letter-spacing:.5px}
+#meta{margin-left:auto;font-size:11px;color:var(--dim);text-align:right;line-height:1.35}
+#log{flex:1;overflow-y:auto;padding:16px 14px 8px;-webkit-overflow-scrolling:touch}
+.msg{margin:0 0 14px;max-width:86%;line-height:1.62;font-size:16px;
+  padding:11px 14px;border-radius:16px;white-space:pre-wrap;word-break:break-word}
+.me{margin-left:auto;background:#17384a;border-bottom-right-radius:5px}
+.it{background:#10222e;border:1px solid var(--line);border-bottom-left-radius:5px}
+.sys{max-width:100%;text-align:center;font-size:12.5px;color:var(--dim);
+  background:none;padding:6px}
+#bar{display:flex;gap:10px;align-items:center;padding:10px 14px 14px;
+  border-top:1px solid var(--line);background:var(--bg2)}
+#talk{flex:1;height:56px;border-radius:28px;border:1px solid var(--line);
+  background:#10222e;color:var(--ink);font-size:17px;font-weight:600;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  transition:background .15s,transform .08s}
+#talk:active{transform:scale(.985)}
+#talk.rec{background:#4a1f22;border-color:#8a3a3f}
+#talk.busy{opacity:.55}
+#txt{width:44px;height:56px;border-radius:28px;border:1px solid var(--line);
+  background:#10222e;color:var(--dim);font-size:20px}
+#inp{display:none;gap:8px;padding:0 14px 14px;background:var(--bg2)}
+#inp.show{display:flex}
+#inp input{flex:1;height:48px;border-radius:24px;border:1px solid var(--line);
+  background:#10222e;color:var(--ink);padding:0 18px;font-size:16px;outline:none}
+#inp button{width:64px;border-radius:24px;border:0;background:var(--accent);
+  color:#04222a;font-weight:700;font-size:15px}
+#mask{position:fixed;inset:0;background:rgba(4,12,18,.94);display:none;
+  flex-direction:column;align-items:center;justify-content:center;gap:22px;z-index:9}
+#mask.show{display:flex}
+#mico{width:96px;height:96px;border-radius:50%;background:#4a1f22;
+  display:flex;align-items:center;justify-content:center;font-size:44px}
+#mask p{color:var(--dim);font-size:15px;margin:0}
+#vol{width:62%;height:5px;border-radius:3px;background:#1d3644;overflow:hidden}
+#volf{height:100%;width:0;background:var(--accent);transition:width .08s}
+#setup{position:fixed;inset:0;background:var(--bg);z-index:12;padding:22px;
+  display:none;flex-direction:column;gap:14px;justify-content:center}
+#setup.show{display:flex}
+#setup h2{margin:0;font-size:19px;font-weight:600}
+#setup p{margin:0;color:var(--dim);font-size:13.5px;line-height:1.6}
+#setup input{height:50px;border-radius:12px;border:1px solid var(--line);
+  background:#10222e;color:var(--ink);padding:0 14px;font-size:15px;outline:none}
+#setup button{height:52px;border-radius:12px;border:0;background:var(--accent);
+  color:#04222a;font-weight:700;font-size:16px}
+#gear{margin-left:8px;width:34px;height:34px;border-radius:50%;border:1px solid var(--line);
+  background:#10222e;color:var(--dim);font-size:15px;flex:none;padding:0}
+#warn{display:none;margin:0 14px 8px;padding:10px 12px;border-radius:10px;
+  background:#4a1f22;border:1px solid #8a3a3f;color:#ffd9d9;font-size:13px;
+  line-height:1.55}
+#warn.show{display:block}
+#warn b{color:#fff}
+#panel{position:fixed;inset:0;background:rgba(4,12,18,.97);z-index:14;display:none;
+  flex-direction:column;gap:14px;padding:22px;overflow-y:auto}
+#panel.show{display:flex}
+#panel h2{margin:0;font-size:18px;font-weight:600}
+#panel .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#panel .row label{width:88px;color:var(--dim);font-size:13.5px;flex:none}
+#panel .row input{flex:1;min-width:150px;height:44px;border-radius:10px;
+  border:1px solid var(--line);background:#0e1c24;color:var(--ink);
+  padding:0 12px;font-size:14.5px;outline:none}
+#panel .row button{height:44px;padding:0 16px;border-radius:10px;border:0;
+  background:#1d3745;color:var(--ink);font-size:14.5px;font-weight:600}
+#panel .row button.p{background:var(--accent);color:#04222a}
+#panel .seg{display:flex;gap:6px;flex:1;flex-wrap:wrap}
+#panel .seg button{flex:1;min-width:56px;background:#0e1c24;border:1px solid var(--line)}
+#panel .seg button.on{background:var(--accent);color:#04222a;border-color:var(--accent)}
+#panel .row select{flex:1;min-width:150px;height:44px;border-radius:10px;
+  border:1px solid var(--line);background:#0e1c24;color:var(--ink);
+  padding:0 10px;font-size:14.5px;outline:none}
+#panel .hint{color:var(--dim);font-size:12.5px;line-height:1.6}
+#live{width:44px;height:56px;border-radius:28px;border:1px solid var(--line);
+  background:#10222e;color:var(--dim);font-size:18px;flex:none;padding:0;
+  line-height:1}
+#live.on{background:var(--accent);color:#04222a;border-color:var(--accent)}
+#live.rec{background:#4a1f22;border-color:#8a3a3f;animation:pulse2 1.2s infinite}
+@keyframes pulse2{0%{box-shadow:0 0 0 0 rgba(224,92,92,.5)}
+  70%{box-shadow:0 0 0 10px rgba(224,92,92,0)}100%{box-shadow:0 0 0 0 rgba(224,92,92,0)}}
+#hint2{position:fixed;left:50%;transform:translateX(-50%);bottom:84px;
+  background:rgba(8,19,27,.95);border:1px solid var(--line);border-radius:20px;
+  padding:7px 16px;font-size:13px;color:var(--dim);z-index:8;display:none;
+  white-space:nowrap}
+#hint2.show{display:block}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div id="dot"></div>
+    <div id="who">心石计划</div>
+    <div id="meta"></div>
+    <button id="gear">⚙</button>
+  </header>
+  <div id="log"></div>
+  <div id="warn"></div>
+  <div id="inp">
+    <input id="ti" placeholder="打字说点什么…" autocomplete="off">
+    <button id="ts">发送</button>
+  </div>
+  <div id="bar">
+    <button id="live" title="连续对话">🎧</button>
+    <button id="talk">点一下说话</button>
+    <button id="txt">⌨</button>
+  </div>
+</div>
+<div id="hint2">正在听…</div>
+
+<div id="panel">
+  <h2>设置</h2>
+
+  <div class="row">
+    <label>脑子</label>
+    <div class="seg" id="mindseg">
+      <button data-mind="local">本地</button>
+      <button data-mind="cloud">云端</button>
+    </div>
+  </div>
+  <div class="hint" id="mindhint">—</div>
+
+  <!-- 云端这一组：只在选「云端」时显示 -->
+  <div id="cloudgroup">
+    <div class="row">
+      <label>云端服务</label>
+      <select id="mpreset">
+        <option value="">（手动填写）</option>
+      </select>
+    </div>
+    <div class="hint" id="presetnote"></div>
+
+    <div class="row">
+      <label>地址</label>
+      <input id="mbase" placeholder="https://api.deepseek.com/v1">
+    </div>
+    <div class="row">
+      <label>模型</label>
+      <input id="mmodel" placeholder="deepseek-flash">
+      <button id="mquery" style="flex:none">查厂商</button>
+    </div>
+    <div class="hint" id="mquerynote">点「查厂商」问服务端它到底提供哪些模型 —— 比看文档可靠。</div>
+    <div class="row">
+      <label>API Key</label>
+      <input id="mkey" type="password" placeholder="sk-…（留空则不修改）">
+    </div>
+  </div>
+
+  <div class="row">
+  <!-- 本地这一组：只在选「本地」时显示 -->
+  <div id="localgroup">
+    <div class="row">
+      <label>本地模型</label>
+      <select id="mlocal">
+        <option value="">（用当前）</option>
+      </select>
+    </div>
+    <div class="hint" id="localnote">本机 Ollama 里的模型。换了以后显存占用会跟着变。</div>
+  </div>
+
+  <!-- 音色：说话也能换（「换个台湾腔」「用晓雨的声音」） -->
+  <div class="row">
+    <label>音色</label>
+    <select id="vselect">
+      <option value="">（载入中…）</option>
+    </select>
+    <button id="vtry" style="flex:none">试听</button>
+  </div>
+  <div class="hint" id="vnote">也可以直接说：「换个台湾腔」「用晓雨的声音」。</div>
+
+  <div class="row">
+    <label>说话长短</label>
+    <div class="seg" id="lenseg">
+      <button data-len="short">短</button>
+      <button data-len="medium">中</button>
+      <button data-len="long">长</button>
+    </div>
+  </div>
+  <div class="hint" id="lennote">也可以直接说：「以后说短点」「多说几句」。</div>
+
+  <div class="row">
+    <label>思考强度</label>
+    <div class="seg" id="thinkseg">
+      <button data-think="auto">自动</button>
+      <button data-think="off">关</button>
+      <button data-think="low">低</button>
+      <button data-think="medium">中</button>
+      <button data-think="high">高</button>
+    </div>
+  </div>
+  <div class="hint" id="thinknote">
+    关 = 最快，说话即时。<br>
+    低/中/高 = 先在心里想一下再说，越高质量越好、越慢。<br>
+    自动 = 日常对话不思考，你说「深度思考」时才想。
+  </div>
+
+  <div class="row">
+    <button id="msave" class="p">保存并切换</button>
+    <button id="mclose">关闭</button>
+  </div>
+  <div class="hint">
+    云端能连就用云端（聪明、不发热），连不上自动回落本地 —— 它不会哑。<br>
+    人格和记忆永远在本地，云端只拿到这一轮的上下文，算完即忘，
+    且本机路径和用户名在出网前会被擦掉。
+  </div>
+</div>
+
+<div id="mask"><div id="mico">🎙</div><div id="vol"><div id="volf"></div></div><p>说完点一下结束</p></div>
+
+<div id="setup">
+  <h2>连不上它</h2>
+  <p id="smsg">请确认手机和它连的是同一个 WiFi。</p>
+  <input id="surl" placeholder="服务地址，例如 http://192.168.31.119:19388">
+  <input id="stok" placeholder="token（如果设了）">
+  <button id="sgo">连接</button>
+</div>
+
+<script>
+(function(){
+  var LS = window.localStorage;
+  var base = LS.getItem('ch_base') || location.origin;
+  var token = LS.getItem('ch_token') || new URLSearchParams(location.search).get('token') || '';
+  var session = LS.getItem('ch_sess') || ('p' + Date.now().toString(36));
+  LS.setItem('ch_sess', session);
+
+  var el = function(id){ return document.getElementById(id); };
+  var log = el('log'), dot = el('dot'), meta = el('meta');
+  var talk = el('talk'), txtBtn = el('txt'), inp = el('inp'), ti = el('ti'), ts = el('ts');
+  var mask = el('mask'), volf = el('volf'), setup = el('setup');
+  var online = false;
+
+  function url(p){
+    var u = base.replace(/\/+$/,'') + p;
+    if (token) u += (p.indexOf('?')>=0?'&':'?') + 'token=' + encodeURIComponent(token);
+    return u;
+  }
+
+  function add(cls, text){
+    var d = document.createElement('div');
+    d.className = 'msg ' + cls;
+    d.textContent = text;
+    log.appendChild(d);
+    log.scrollTop = log.scrollHeight;
+    return d;
+  }
+  function sys(text){ add('sys', text); }
+
+  // ---------- 健康检查 ----------
+  function health(){
+    fetch(url('/health'), {cache:'no-store'}).then(function(r){
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      return r.json();
+    }).then(function(h){
+      online = true;
+      dot.classList.add('on');
+      el('who').textContent = '它';
+      var ln = ['记忆 ' + h.memories + ' 条'];
+      if (h.taught_total !== undefined) ln.push('教过 ' + h.taught_total + ' 条');
+      if (h.learning && h.learning.waiting) ln.push('整理中…');
+      // 顶部显示「当前真正在用的脑子」。云端开着就显示云端那个，
+      // 不能一直显示本地 27B —— 那会让人以为没切换（主人因此以为我骗他）。
+      var brain = (h.model || '').replace(':latest', '');
+      if(h.model_where) brain += '（' + h.model_where + '）';
+      meta.textContent = brain + '\n' + ln.join(' · ');
+      setup.classList.remove('show');
+      meta.title = '点这里看它被教过什么';
+    }).catch(function(e){
+      online = false;
+      dot.classList.remove('on');
+      meta.textContent = '离线';
+      if(!log.dataset.welcomed){
+        log.dataset.welcomed = 1;
+        sys('连不上。检查手机和它是否同一个 WiFi。');
+      }
+      el('surl').value = base;
+      el('stok').value = token;
+      setup.classList.add('show');
+    });
+  }
+
+  // ---------- 麦克风可用性自查 ----------
+  // 手机浏览器只在「安全上下文」里给麦克风：https 或 localhost。
+  // 很多人卡在这里却看不到任何提示 —— 所以直接把原因写到屏幕上。
+  function micCheck(){
+    var w = el('warn');
+    var msgs = [];
+    var isHttps = (location.protocol === 'https:');
+    var isLocal = (location.hostname === 'localhost' ||
+                   location.hostname === '127.0.0.1');
+    if(!window.isSecureContext && !isHttps && !isLocal){
+      msgs.push('<b>麦克风用不了：这个地址不是 https。</b><br>' +
+                '手机浏览器只在 https 下给麦克风。你现在打开的是 ' +
+                location.protocol + '//' + location.host +
+                '。把它换成 <b>https://' + location.hostname + ':19443</b>' +
+                '（端口 19443），或者在下面「连不上它」里改地址。');
+    } else if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      msgs.push('<b>这个浏览器不支持录音。</b>换 Chrome 或 Safari 试试。');
+    }
+    if(msgs.length){
+      w.innerHTML = msgs.join('<br><br>');
+      w.classList.add('show');
+      talk.textContent = '麦克风不可用';
+      talk.classList.add('busy');
+      return false;
+    }
+    w.classList.remove('show');
+    return true;
+  }
+
+  el('sgo').onclick = function(){
+    base = el('surl').value.trim().replace(/\/+$/,'');
+    token = el('stok').value.trim();
+    LS.setItem('ch_base', base);    LS.setItem('ch_token', token);
+    log.dataset.welcomed = '';
+    health();
+  };
+
+  // ---------- 点右上角：看它现在被教成了什么样 ----------
+  // 这是「养成」唯一的验收窗口 —— 他说的话有没有真的写进去，一眼能看到。
+  meta.style.cursor = 'pointer';
+  meta.onclick = function(){
+    fetch(url('/facts'), {cache:'no-store'}).then(function(r){ return r.json(); })
+      .then(function(o){
+        var names = {name:'名字', call:'怎么称呼你', setup:'它是什么',
+                     style:'说话风格', about:'关于他', self:'它自己的观察'};
+        var n = 0;
+        Object.keys(names).forEach(function(k){
+          var rows = o[k] || [];
+          rows.forEach(function(row){ n++; sys('【' + names[k] + '】' + row.text); });
+        });
+        if(!n) sys('它还什么都没被教过 —— 跟他说话时直接告诉它就行：'
+                 + '「你叫什么」「怎么称呼我」这类，你直接告诉它就行。');
+        else sys('—— 一共 ' + n + ' 条。要删哪条，说一声就行。');
+      })
+      .catch(function(e){ sys('读不到：' + e.message); });
+  };
+
+  // ---------- 对话（SSE 流式）----------
+  var busy = false;
+  function send(text){
+    if(!text || busy) return;
+    busy = true; talk.classList.add('busy');
+    ttsReset();
+    add('me', text);
+    var bubble = add('it', '');
+    var full = '';
+    var spoken = 0;
+
+    // 按句切：一句话一完整就推给 TTS —— 不用等整段说完才开始合成。
+    // 这是"回应偏慢"的主要来源（豆包合成 1.3~4s 全压在最后）。
+    function feedTts(force){
+      var rest = full.slice(spoken);
+      if(!rest) return;
+      var m;
+      while((m = rest.match(/^[\s\S]*?[。！？!?；;…\n]+/))){
+        var seg = m[0];
+        spoken += seg.length;
+        rest = full.slice(spoken);
+        ttsStartSpeaking();
+        ttsPush(seg);
+      }
+      if(force && rest.trim()){
+        spoken = full.length;
+        ttsStartSpeaking();
+        ttsPush(rest);
+      }
+    }
+    fetch(url('/chat'), {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text:text, session:session})
+    }).then(function(r){
+      if(!r.ok) throw new Error('HTTP '+r.status);
+      var rd = r.body.getReader(), dec = new TextDecoder(), buf = '';
+      function pump(){
+        return rd.read().then(function(res){
+          if(res.done){ finish(); return; }
+          buf += dec.decode(res.value, {stream:true});
+          var parts = buf.split('\n\n');
+          buf = parts.pop();
+          parts.forEach(function(p){
+            var line = p.trim();
+            if(line.indexOf('data: ') !== 0) return;
+            var o;
+            try{ o = JSON.parse(line.slice(6)); }catch(e){ return; }
+            if(o.t === 'delta'){ full += o.d; bubble.textContent = full;
+              log.scrollTop = log.scrollHeight; feedTts(false); }
+            else if(o.t === 'done'){ if(o.text) { full = o.text;
+              bubble.textContent = full; } }
+            else if(o.t === 'error'){ bubble.textContent = '[出错] ' + o.msg; }
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(function(e){
+      bubble.textContent = '[连不上] ' + e.message;
+      finish();
+    });
+    function finish(){
+      busy = false; talk.classList.remove('busy');
+      // 念完再回到「听」的状态 —— 否则会把自己说的话又录进去
+      if(full){
+        live.state = 'speaking';
+        feedTts(true);
+        ttsClose(function(){
+          window.__assistantSpeaking = false;
+          // 不再"预热"麦克风：预热拿到的流在 iOS 上可能是哑的（实测 0.0004）。
+          // 录音开始时会重新要一条新的，这里只回到听的状态。
+          if(nativeLive.on){ nativeLive.running = false; nativeLiveKick(); return; }
+          if(live.on){ live.state = 'listening'; live.chunks = [];
+            live.speechFrames = 0; live.silenceFrames = 0; hint2('正在听…'); }
+        });
+      } else if(live.on){
+        live.state = 'listening';
+      }
+      health();
+    }
+  }
+
+  // ---------- 出声（手机本地 TTS，不走网络）----------
+  // iOS 的坑：speechSynthesis 必须在「用户手势」里第一次调用才能解锁。
+  // 我们的 speak() 是在 fetch 的回调里调的，手势早过去了 —— 所以要先解锁。
+  var ttsReady = false;
+  var ttsLog = [];
+  function tlog(s){ ttsLog.push(s); if(ttsLog.length>14) ttsLog.shift(); }
+  window.onerror = function(m, u, l){ tlog('JS错误: ' + m + ' @' + l); };
+  function ttsUnlock(){
+    try{
+      if(!window.speechSynthesis){ tlog('无 speechSynthesis'); return; }
+      var u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0; u.rate = 10; u.lang = 'zh-CN';
+      speechSynthesis.speak(u);          // 这次必须发生在手势的同步调用栈里
+      ttsReady = true;
+      tlog('已解锁；语音数 ' + (speechSynthesis.getVoices()||[]).length);
+    }catch(e){ tlog('解锁失败: ' + e.message); }
+  }
+  function pickVoice(){
+    var vs = [];
+    try { vs = speechSynthesis.getVoices() || []; } catch(e){}
+    for(var i=0;i<vs.length;i++){
+      var l = (vs[i].lang||'').toLowerCase();
+      if(l.indexOf('zh') === 0 || l.indexOf('cmn') === 0) return vs[i];
+    }
+    // iOS 上 getVoices() 常常是空的。这时**不要设 voice**，让它用默认；
+    // 设一个拿不到的对象反而会被整句跳过。
+    return null;
+  }
+  function ttsInfo(){
+    var n = 0, zh = [];
+    try {
+      var vs = speechSynthesis.getVoices() || [];
+      n = vs.length;
+      for(var i=0;i<vs.length;i++){
+        var l=(vs[i].lang||'').toLowerCase();
+        if(l.indexOf('zh')===0 || l.indexOf('cmn')===0) zh.push(vs[i].name+'/'+vs[i].lang);
+      }
+    } catch(e){}
+    return '语音总数 ' + n + '，中文 ' + zh.length +
+           (zh.length ? '（' + zh.join('、') + '）' : '') +
+           (ttsReady ? '，已解锁' : '，未解锁') +
+           ' ｜ 最近记录：' + (ttsLog.slice(-4).join(' / ') || '（空）');
+  }
+  // ---------- 出声 ----------
+  // 主路：把文字发给服务端 /tts，拿 WAV 回来播。
+  // 为什么不用手机自带的 speechSynthesis 做主路：安卓上它太不稳 ——
+  // 没装中文音色就不出声、静音键一按就哑、必须用户手势才解锁，
+  // 而且报错常常是静默的，人只会觉得"它不说话"。
+  // 服务端 piper 合成后，手机只要播一个音频文件。
+  // speechSynthesis 留作兜底：服务端合成失败时还能出声。
+  // 出声用的 <audio> —— 全站只留这一个，反复复用。
+  // iOS 的坑：Safari 只放行「在用户手势里播过一次」的那个音频元素。
+  // 以前每次 new Audio()，一律被当成自动播放拦掉，于是每次都掉进
+  // 手机合成兜底 —— 主人听到的就不是豆包音色了（截图里的
+  // 「⚠️ 手机合成兜底（不是选中的音色）」就是这个）。
+  var ttsAudio = new Audio();
+  ttsAudio.preload = 'auto';
+  var _audioUnlocked = false;
+
+  function silentWavUrl(){
+    // 50ms 静音 WAV：只用来在第一下手势里把 <audio> 解锁，听不见。
+    var sr = 8000, n = 400, bytes = 44 + n * 2;
+    var buf = new ArrayBuffer(bytes), v = new DataView(buf);
+    function w(o, s){ for(var i=0;i<s.length;i++) v.setUint8(o+i, s.charCodeAt(i)); }
+    w(0,'RIFF'); v.setUint32(4, bytes-8, true); w(8,'WAVE');
+    w(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+    v.setUint16(22,1,true); v.setUint32(24,sr,true); v.setUint32(28,sr*2,true);
+    v.setUint16(32,2,true); v.setUint16(34,16,true);
+    w(36,'data'); v.setUint32(40, n*2, true);
+    return URL.createObjectURL(new Blob([buf], {type:'audio/wav'}));
+  }
+
+  function unlockAudio(){
+    if(_audioUnlocked) return;
+    _audioUnlocked = true;
+    try{
+      ttsAudio.src = silentWavUrl();
+      var p = ttsAudio.play();
+      if(p && p.then){
+        p.then(function(){ tlog('音频元素已解锁'); }).catch(function(){ _audioUnlocked = false; });
+      }
+    }catch(e){ _audioUnlocked = false; }
+    // 顺手把麦克风也用这次手势要下来：第一次点屏幕就把授权弹完，
+    // 之后按「说话」可以立刻开录，不用再等「开麦中…」。
+    try{ getMic().catch(function(){}); }catch(e){}
+  }
+
+  // 打断 / 收尾时叫停声音。只碰 <audio> 这一个元素：
+  // 曾经试过在浏览器里 decodeAudioData + GainNode 抬响，iOS 上和录音那个
+  // AudioContext 抢音频会话 —— 结果是播放直接变哑，而且之后连录音都收不到
+  // 数据（只录到 0 秒）。现在增益改在服务端算（音色不变，只抬电平），
+  // 客户端这里永远只播一个 <audio>。
+  function stopPlayback(){
+    try{ ttsAudio.onended = null; ttsAudio.onerror = null; ttsAudio.pause(); }catch(e){}
+  }
+  document.addEventListener('pointerdown', unlockAudio, true);
+  document.addEventListener('touchstart', unlockAudio, {passive:true, capture:true});
+
+  function speak(text, onDone){
+    var fired = false;
+    // 自己说话的时候必须把耳朵关上，否则麦克风会听见自己 →
+    // 又触发一轮识别 → 自己跟自己聊起来（主人报的"被自己的语音影响"）。
+    var _wasListening = false;
+    window.__assistantSpeaking = true;      // 兜底层靠这个标志丢弃识别结果
+    try{
+      if(typeof nativeLive !== 'undefined' && nativeLive && nativeLive.on){
+        _wasListening = true;
+        nativeLive.running = false;
+        if(window.NativeASR && window.NativeASR.stop){
+          try{ window.NativeASR.stop(); }catch(e){}
+        }
+      }
+    }catch(e){}
+
+    function resumeEar(){
+      // 播完再等 260ms 才开麦：扬声器有余音，立刻开麦会把自己的尾音听进去
+      setTimeout(function(){
+        window.__assistantSpeaking = false;
+        if(!_wasListening) return;
+        try{
+          if(typeof nativeLive !== 'undefined' && nativeLive &&
+             nativeLive.on && !nativeLive.running){
+            nativeLiveKick();
+          }
+        }catch(e){}
+      }, 260);
+    }
+
+    function fire(){ if(fired) return; fired = true; resumeEar();
+                     if(onDone) try{ onDone(); }catch(e){} }
+    if(!text){ fire(); return; }
+    // 复用同一个 <audio>：iOS 只放行「在手势里播过一次」的那个元素
+    try{ ttsAudio.onended = null; ttsAudio.onerror = null; ttsAudio.pause(); }catch(e){}
+    // 兜底计时：万一音频事件不触发，也别把"听"永久卡住
+    var guard = setTimeout(fire, Math.min(60000, 1500 + text.length * 260));
+    function finish(){
+      clearTimeout(guard);
+      fire();
+    }
+    // 打断：说话说到一半被主人打断时，立刻停掉声音，并把"听"还回去。
+    // 以前只能等它说完 —— 主人明确要求"别一定把话说完"。
+    window.__speakCancel = function(){
+      stopPlayback();
+      try{ ttsAudio.pause(); }catch(e){}
+      try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+      window.__speakCancel = null;
+      finish();
+    };
+    fetch(url('/tts'), {method:'POST',
+                        headers:{'Content-Type':'application/json'},
+                        body: JSON.stringify({text: text})})
+      .then(function(r){
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        // 看服务端说这段是谁合成的。主人听出差别时，
+        // 不用猜 —— 下面会把它显示在对话里。
+        window.__lastTtsEngine = r.headers.get('X-Tts-Engine') || '?';
+        return r.blob();
+      })
+      .then(function(blob){
+        if(!blob || blob.size < 1000) throw new Error('音频太小');
+        tlog('服务端音频 ' + Math.round(blob.size/1024) + 'KB，开始播');
+        sys('🔊 出声：' + (window.__lastTtsEngine || '?') + ' '
+            + Math.round(blob.size/1024) + 'KB');
+        // 播之前把麦克风轨道放掉。
+        // iOS 上「一直挂着 getUserMedia 的那条流」在播放过音频之后会变成
+        // 一条哑流（readyState 还是 live，但采到的只有 0.0007 底噪）——
+        // 主人报的「第一句好好的，第二句太安静 0.0007」就是它。
+        // 下次按「说话」会重新 getUserMedia，权限已给过，不会再弹框。
+        try{ micRelease(); }catch(e){}
+        var u = URL.createObjectURL(blob);
+        ttsAudio.onended = function(){
+          try{ URL.revokeObjectURL(u); }catch(e){}
+          tlog('服务端音频播完');
+          finish();
+        };
+        ttsAudio.onerror = function(){
+          try{ URL.revokeObjectURL(u); }catch(e){}
+          tlog('音频播放失败，改用手机合成');
+          sys('⚠️ 手机合成兜底（不是选中的音色）'); speakLocal(text, finish);
+        };
+        ttsAudio.src = u;
+        var p = ttsAudio.play();
+        if(p && p.catch){
+          p.catch(function(e){
+            tlog('自动播放被拦：' + e.message + '，改手机合成');
+            sys('⚠️ 手机合成兜底（不是选中的音色）'); speakLocal(text, finish);
+          });
+        }
+      })
+      .catch(function(e){
+        tlog('服务端出声失败：' + e.message + '，退回手机合成');
+        sys('⚠️ 手机合成兜底（不是选中的音色）'); speakLocal(text, finish);
+      });
+  }
+
+  // 兜底：手机自带的语音合成
+  function speakLocal(text, done){
+    var fired = false;
+    function fire(){ if(fired) return; fired = true; if(done) try{ done(); }catch(e){} }
+    try{
+      if(!window.speechSynthesis){ sys('手机不支持语音合成'); fire(); return; }
+      try{ if(speechSynthesis.speaking) speechSynthesis.cancel(); }catch(e){}
+      var u = new SpeechSynthesisUtterance(text);
+      u.lang = 'zh-CN'; u.rate = 1.05; u.pitch = 1.0; u.volume = 1.0;
+      var v = pickVoice();
+      if(v) u.voice = v;
+      u.onstart = function(){ tlog('手机合成开始发声'); };
+      u.onend = function(){ tlog('手机合成结束'); fire(); };
+      u.onerror = function(e){
+        tlog('手机合成错误: ' + (e.error||'未知'));
+        sys('出声失败：' + (e.error || '未知'));
+        fire();
+      };
+      speechSynthesis.speak(u);
+      setTimeout(function(){ try{ if(speechSynthesis.paused) speechSynthesis.resume(); }catch(e){} }, 80);
+      setTimeout(fire, Math.min(30000, 1200 + text.length * 220));
+    }catch(e){ sys('出声出错：' + e.message); fire(); }
+  }
+
+  // ---------- 边说边合成：句子一成型就送去 TTS，边播边合成下一句 ----------
+  // 以前是等整段回复流完才一次性合成 —— 豆包合成 1.3~4s，全砸在
+  // 「话都说完了才出声」上，主人反馈"回应偏慢"主要就是这一段。
+  // 现在按句切：第一句成型就合成开播，后面的句子在播放期间并行合成。
+  var ttsQ = [], ttsPlaying = false, ttsStreamClosed = true, ttsAllDone = null;
+  var ttsStarted = false;
+
+  function ttsReset(){
+    ttsQ = []; ttsPlaying = false; ttsStreamClosed = true; ttsAllDone = null;
+    ttsStarted = false;
+    stopPlayback();
+  }
+
+  function ttsFetch(text){
+    return fetch(url('/tts'), {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text:text})}).then(function(r){
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        window.__lastTtsEngine = r.headers.get('X-Tts-Engine') || '?';
+        return r.blob();
+      });
+  }
+
+  function ttsStartSpeaking(){
+    if(ttsStarted) return;
+    ttsStarted = true;
+    window.__assistantSpeaking = true;      // 兜底层靠这个标志丢弃识别结果
+    // 一边播一边听会把喇叭里的声音录进去 —— 先把麦克风放掉
+    try{ micRelease(); }catch(e){}
+    try{
+      if(typeof nativeLive !== 'undefined' && nativeLive && nativeLive.on){
+        nativeLive.running = false;
+      }
+    }catch(e){}
+    window.__speakCancel = function(){
+      ttsQ = []; ttsPlaying = false;
+      stopPlayback();
+      try{ if(window.speechSynthesis) window.speechSynthesis.cancel(); }catch(e){}
+      var f = ttsAllDone; ttsAllDone = null;
+      window.__assistantSpeaking = false;
+      window.__speakCancel = null;
+      if(f) try{ f(); }catch(e){}
+    };
+  }
+
+  function ttsPush(seg){
+    var t = (seg || '').trim();
+    if(!t) return;
+    // 纯标点/表情不用送去合成（服务端也会兜一层，这里先省一次往返）
+    if(!/[0-9A-Za-z\u4e00-\u9fff]/.test(t)) return;
+    ttsStreamClosed = false;
+    ttsQ.push({text: t, req: null});
+    ttsPump();
+  }
+
+  function ttsPump(){
+    if(ttsPlaying) return;
+    var item = ttsQ.shift();
+    if(!item){ ttsMaybeDone(); return; }
+    ttsPlaying = true;
+    // 流水线：当前这句在放的时候，下一句的合成已经在路上
+    if(ttsQ.length && !ttsQ[0].req){ ttsQ[0].req = ttsFetch(ttsQ[0].text); }
+    if(!item.req) item.req = ttsFetch(item.text);
+    item.req.then(function(blob){
+      if(!blob || blob.size < 1000) throw new Error('音频太小');
+      var u = URL.createObjectURL(blob);
+      return new Promise(function(res){
+        ttsAudio.onended = function(){ try{ URL.revokeObjectURL(u); }catch(e){} res(); };
+        ttsAudio.onerror = function(){
+          try{ URL.revokeObjectURL(u); }catch(e){}
+          tlog('音频播不了，这一段改用手机合成');
+          speakLocal(item.text, res);
+        };
+        ttsAudio.src = u;
+        var q = ttsAudio.play();
+        if(q && q.catch){ q.catch(function(){ speakLocal(item.text, res); }); }
+      });
+    }).catch(function(e){
+      tlog('TTS 失败：' + (e && e.message));
+      return new Promise(function(res){ speakLocal(item.text, res); });
+    }).then(function(){
+      ttsPlaying = false;
+      ttsPump();
+    });
+  }
+
+  function ttsClose(onAllDone){
+    ttsStreamClosed = true;
+    ttsAllDone = onAllDone || null;
+    if(!ttsPlaying && !ttsQ.length) ttsMaybeDone();
+  }
+
+  function ttsMaybeDone(){
+    if(!ttsStreamClosed || ttsPlaying || ttsQ.length) return;
+    var f = ttsAllDone;
+    if(!f) return;
+    ttsAllDone = null;
+    window.__assistantSpeaking = false;
+    window.__speakCancel = null;
+    // 放完把 <audio> 的源清掉，让 iOS 把媒体会话还给麦克风。
+    // 不清的话，下一次 getUserMedia 有可能拿到一条"哑流"
+    // （readyState 还是 live，采到的只有 0.0007 底噪）。
+    try{
+      ttsAudio.onended = null; ttsAudio.onerror = null; ttsAudio.pause();
+      ttsAudio.removeAttribute('src'); ttsAudio.load();
+    }catch(e){}
+    f();
+  }
+
+  if(window.speechSynthesis){
+    speechSynthesis.onvoiceschanged = function(){};
+    // 主动拉一次，让 voices 列表早点就绪
+    try{ speechSynthesis.getVoices(); }catch(e){}
+  }
+
+  // ---------- 录音 → 上传 WAV ----------
+  var rec = null, chunks = [], ac = null, analyser = null, raf = 0, recTimer = 0;
+  var recording = false;
+  // 「按下去 → 开麦 → 真的开始录」中间有个异步空窗。这期间再点一次
+  // 会走 startRec 又开一路麦克风，出现两路同时录 —— 用这个标记堵住。
+  var recStarting = false;
+
+  // 录音用的 AudioContext —— 全站只建一个。
+  // iOS 对同时活着的 AudioContext 有上限（实测 4~6 个），以前每录一次就
+  // new 一个、录完 close 一个，跑几轮之后新建的那个会停在 suspended，
+  // ScriptProcessor 一块数据都收不到 —— 表现就是主人报的
+  // 「有时候能识别，有时候说我太短了」，而且越用越容易出现。
+  var recAc = null;
+  var recMute = null;      // 0 增益出口：让 processor 跑起来但绝对不出声
+  var recReadyTimer = 0;   // 「开麦中」卡住的看门狗
+  var deadMicTimer = 0;    // 哑流自查
+  var recRetried = false;  // 每次按下只自动重开一次，防止死循环
+  function getRecAc(){
+    var Ctx = window.AudioContext || window.webkitAudioContext;
+    if(!recAc || recAc.state === 'closed'){ recAc = new Ctx(); }
+    if(recAc.state === 'suspended'){ try{ recAc.resume(); }catch(e){} }
+    return recAc;
+  }
+
+  // ---------- 麦克风：整个页面只申请一次 ----------
+  // 之前每次「按住说话」都新建一个 getUserMedia，于是每次都可能重新弹授权。
+  // 现在把流缓存下来，同一页面会话里只申请一次。
+  var micCache = {stream: null, requested: false, error: null, pending: null};
+
+  function getMic(){
+    // 同一时刻只允许一个 getUserMedia 在飞：预热和用户点击可能撞在一起，
+    // 撞了会拿到两条流、其中一条永远没人关。
+    if(micCache.pending) return micCache.pending;
+    if(micCache.stream){
+      // 检查还活着没（被系统收走后要重新要）
+      // 坑：播放过音频之后，iOS 会给一条 "live 但已经哑了" 的流 ——
+      // readyState 还是 live，采到的只有 0.0007 的底噪。muted 才是真信号。
+      var tracks = micCache.stream.getAudioTracks ? micCache.stream.getAudioTracks() : [];
+      if(tracks.length && tracks[0].readyState === 'live' && !tracks[0].muted){
+        return Promise.resolve(micCache.stream);
+      }
+      if(tracks.length && tracks[0].muted){
+        tlog('缓存的麦克风流已被静音，重新申请');
+      }
+      micCache.stream = null;
+    }
+    if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      return Promise.reject(new Error('浏览器没有录音接口'));
+    }
+    var p = navigator.mediaDevices.getUserMedia({audio:{
+      channelCount:1,
+      // 三个处理开关全关。为什么：
+      // ① echoCancellation 会让 iOS 开"语音处理"IO —— 播放过音频之后它会
+      //    把麦克风压到几乎没有声音（实测录到的最响只有 0.0015，人明明在
+      //    说话）。我们录音时本来就不放声音，回声消除纯属帮倒忙。
+      // ② noiseSuppression / autoGainControl 同样会来回压电平，
+      //    表现就是"一会儿正常、一会儿太轻"。
+      // 拿原始麦克风；电平归一化改到服务端统一做。
+      echoCancellation:false, noiseSuppression:false, autoGainControl:false
+    }}).then(function(s){
+      micCache.stream = s;
+      micCache.requested = true;
+      tlog('麦克风已获取（只申请这一次）');
+      return s;
+    }).catch(function(e){
+      micCache.error = (e && e.name) || 'error';
+      throw e;
+    });
+    micCache.pending = p;
+    p.then(function(){ micCache.pending = null; },
+           function(){ micCache.pending = null; });
+    return p;
+  }
+
+  function micRelease(){
+    try{
+      if(micCache.stream){
+        micCache.stream.getTracks().forEach(function(t){ t.stop(); });
+      }
+    }catch(e){}
+    micCache.stream = null;
+  }
+
+  // ---------- 安卓原生识别（APK 里才有的桥）----------
+  // 手机上没打包本地识别模型，火山的 ASR 也没接，所以改用系统自带的语音识别。
+  // 网页这边只需要：能调 start/stop，并且接收 window.onNativeASR(text, isFinal)。
+  function hasNativeASR(){
+    try{
+      return !!(window.NativeASR && window.NativeASR.available && window.NativeASR.available());
+    }catch(e){ return false; }
+  }
+  var nativeRecording = false;
+
+  window.onNativeASR = function(text, isFinal){
+    if(!nativeRecording && !isFinal) return;
+    if(text) sys('听到：' + text);
+    if(isFinal){
+      nativeRecording = false;
+      recording = false;
+      talk.classList.remove('rec'); talk.textContent = '点一下说话';
+      mask.classList.remove('show');
+      if(text && text.trim()){ send(text.trim()); }
+      else { sys('没听清'); }
+    }
+  };
+  window.onNativeASREvent = function(name, detail){
+    // 把识别过程每一步都显示出来。之前只有"没听清"一句话，
+    // 完全不知道引擎是没启动、还是启动但没收到声音。
+    if(name === '音量'){
+      el('hint2').textContent = '识别中… 音量 ' + detail;
+      return;
+    }
+    sys('识别：' + name + (detail ? '（' + detail + '）' : ''));
+  };
+
+
+  function startRecNative(){
+    if(recording) return;
+    ttsUnlock();
+    nativeRecording = true;
+    recording = true;
+    talk.classList.add('rec'); talk.textContent = '录音中 · 点一下结束';
+    mask.classList.add('show');
+    try{ window.NativeASR.start(); }
+    catch(e){ sys('启动识别失败：' + e.message); nativeRecording = false; recording = false; }
+  }
+
+  // ---------- 录音：MediaRecorder（不用 AudioContext）----------
+  // 为什么整条换掉：AudioContext + ScriptProcessor 这条路上，iOS 会在
+  // 「录音 / 播放」之间抢音频会话 —— 抢输的那次就变成哑流（只有 0.0007
+  // 底噪）、录到 0 秒、开麦卡住。MediaRecorder 直接录麦克风流，完全不碰
+  // 音频上下文，这些症状从根上没有了。代价是拿不到实时波形 ——
+  // 音量条改成"录音中 + 秒数"，比以前嘴喊更实在。
+  var mr = null, mrChunks = [], mrMime = '';
+  var ignoreStopUntil = 0;   // 开录后这段时间内的"停"一律忽略（防连点）
+  var recStartedAt = 0;      // 真的开始录的时刻，用来核对录了多久
+  var stopReason = '';       // 这次是谁把录音停掉的（诊断用）
+
+  function pickMrMime(){
+    if(typeof MediaRecorder === 'undefined') return '';
+    var cands = ['audio/mp4', 'audio/aac', 'audio/webm;codecs=opus', 'audio/webm'];
+    for(var i=0;i<cands.length;i++){
+      try{ if(MediaRecorder.isTypeSupported(cands[i])) return cands[i]; }catch(e){}
+    }
+    return '';
+  }
+
+  function startRec(){
+    if(recording || recStarting) return;
+    recRetried = false;
+    if(hasNativeASR()){ startRecNative(); return; }
+    if(window.NativeASR){
+      sys('原生识别不可用：这台手机没有语音识别引擎（会回落到录音上传）');
+    } else if(window.__isApk){
+      sys('原生识别桥不存在 —— 这个 APK 太旧了，装 0.9 以上');
+    }
+    if(!micCheck()){
+      sys('这个地址给不了麦克风，看上面的红框。');
+      return;
+    }
+    var MT = pickMrMime();
+    if(!MT){
+      sys('这个浏览器不支持 MediaRecorder 录音 —— 用 Safari 或更新系统');
+      return;
+    }
+    ttsUnlock();
+    // 一律重新拿一条麦克风流，不用缓存的、也不信"预热"。
+    // 实测教训：播放过音频之后预热拿到的流，readyState 还是 live、
+    // muted 也是 false，但录出来只有 0.0004 的底噪 —— 缓存/预热的流不可信。
+    // 现拿现用，多花 300~500ms，换的是"一定能录到声音"。
+    var hadMic = false;
+    try{ micRelease(); }catch(e){}
+    talk.classList.add('rec');
+    talk.textContent = '开麦中…';
+    mask.classList.add('show');
+    recStarting = true;
+    clearTimeout(recReadyTimer);
+    recReadyTimer = setTimeout(function(){
+      if(!recStarting) return;
+      sys('开麦超时（6 秒没拿到麦克风）—— 已取消，再点一次「说话」');
+      abortRec();
+    }, 6000);
+    getMic().then(function(stream){
+      recStarting = false;
+      clearTimeout(recReadyTimer);
+      if(recording) return;
+      mrMime = MT;
+      mrChunks = [];
+      try{
+        mr = new MediaRecorder(stream, {mimeType: MT, audioBitsPerSecond: 64000});
+      }catch(e){
+        try{
+          mr = new MediaRecorder(stream);
+          mrMime = mr.mimeType || MT;
+        }catch(e2){
+          sys('录音器启动失败：' + (e2 && e2.message));
+          abortRec();
+          return;
+        }
+      }
+      mr.ondataavailable = function(ev){
+        if(ev.data && ev.data.size){ mrChunks.push(ev.data); }
+      };
+      mr.onstop = function(){ finishMr(); };
+      mr.onerror = function(ev){
+        stopReason = 'error';
+        try{
+          sys('录音器报错：' + ((ev && ev.error && (ev.error.name || ev.error.message))
+                               || 'unknown'));
+        }catch(e){}
+      };
+      // 不用 timeslice：iOS 上 mr.start(毫秒) 会莫名其妙提前 onstop
+      // （实测失败录音全是 0.53~0.77 秒，正好是第一块分片的大小）。
+      // 不带参数，数据在 stop 时一次性给齐。
+      try{
+        mr.start();
+      }catch(e){
+        sys('录音启动失败：' + (e && e.message));
+        abortRec();
+        return;
+      }
+      recording = true;
+      recStartedAt = Date.now();
+      ignoreStopUntil = recStartedAt + 800;
+      // 现在是"已在录"了，直接进录音中状态
+      talk.textContent = '录音中 · 点一下结束';
+      try{ navigator.vibrate && navigator.vibrate(12); }catch(e){}
+      clearTimeout(recTimer);
+      recTimer = setTimeout(function(){
+        if(recording){ stopReason = 'timeout'; sys('录太久了，自动收尾'); stopRec(); }
+      }, 30000);
+    }).catch(function(e){
+      recStarting = false;
+      clearTimeout(recReadyTimer);
+      var n = (e && e.name) || '';
+      var tip = '';
+      if(n === 'NotAllowedError' || n === 'SecurityError'){
+        tip = '（浏览器拒绝给麦克风。检查地址栏左边有没有被禁用的麦克风图标）';
+      } else if(n === 'NotFoundError' || n === 'DevicesNotFoundError'){
+        tip = '（设备上没有麦克风）';
+      } else if(n === 'NotReadableError'){
+        tip = '（麦克风被别的 App 占着）';
+      }
+      sys('拿不到麦克风：' + n + ' ' + (e && e.message || '') + tip);
+      abortRec();
+    });
+  }
+
+  // 放弃这次录音：不发送，界面回到「点一下说话」
+  function abortRec(){
+    recording = false;
+    recStarting = false;
+    clearTimeout(recTimer);
+    clearTimeout(recReadyTimer);
+    try{
+      if(mr && mr.state !== 'inactive'){ mr.onstop = null; mr.stop(); }
+    }catch(e){}
+    mr = null;
+    mrChunks = [];
+    talk.classList.remove('rec');
+    talk.textContent = '点一下说话';
+    mask.classList.remove('show');
+  }
+
+  function stopRec(){
+    // 原生识别这条路：叫停就行，结果会通过 onNativeASR 回来
+    if(nativeRecording){
+      try{ window.NativeASR.stop(); }catch(e){}
+      return;
+    }
+    if(!recording) return;
+    recording = false;
+    if(!stopReason) stopReason = 'user';
+    clearTimeout(recTimer);
+    talk.classList.remove('rec');
+    talk.textContent = '点一下说话';
+    mask.classList.remove('show');
+    try{ mr.stop(); }catch(e){ finishMr(); }
+  }
+
+  function finishMr(){
+    var blob = new Blob(mrChunks, {type: mrMime || 'audio/mp4'});
+    var size = blob.size;
+    var dur = recStartedAt ? (Date.now() - recStartedAt) / 1000 : 0;
+    var nChunks = mrChunks.length;
+    var why = stopReason || '?';
+    recStartedAt = 0;
+    stopReason = '';
+    mrChunks = [];
+    mr = null;
+    if(size < 1500){
+      sys('没录到东西（' + dur.toFixed(2) + ' 秒 / ' + size + ' 字节）'
+          + '——再点一次「说话」');
+      return;
+    }
+    sys('识别中…（录了 ' + dur.toFixed(2) + ' 秒 / ' + Math.round(size/1024) + 'KB）');
+    fetch(url('/asr'), {method:'POST',
+      headers:{'Content-Type': blob.type || 'application/octet-stream'},
+      body: blob})
+      .then(function(res){ return res.json(); })
+      .then(function(o){
+        if(o.text && o.text.trim()){
+          var last = log.lastChild;
+          if(last && last.className.indexOf('sys')>=0) last.remove();
+          send(o.text);
+        } else if(o.reason){
+          // 区分"人说话轻"和"麦克风是哑的"：最响帧 < 0.01 就不是人的问题，
+          // 是这轮拿到的流没声音。自动作废这条流，下次按下就是新的麦克风。
+          if(typeof o.loudest === 'number' && o.loudest < 0.01){
+            sys('这条录音里几乎没有声音（最响 ' + o.loudest.toFixed(4)
+                + '，录了 ' + dur.toFixed(2) + ' 秒 / ' + nChunks + ' 块，停止=' + why + '）'
+                + '—— 不是你说话轻；再点一次「说话」');
+            try{ micRelease(); }catch(e){}
+          } else {
+            sys(o.reason);
+          }
+        } else {
+          sys('没听清（峰值 ' + (o.peak||0) + '，录了 ' + dur.toFixed(2) + ' 秒）');
+        }
+      })
+      .catch(function(e){ sys('识别失败：' + e.message); });
+  }
+
+  function merge(list){
+    var n = 0, i;
+    for(i=0;i<list.length;i++) n += list[i].length;
+    var out = new Float32Array(n), off = 0;
+    for(i=0;i<list.length;i++){ out.set(list[i], off); off += list[i].length; }
+    return out;
+  }
+
+  function encodeWav(pcm, srIn, srOut){
+    var data = pcm;
+    if(srIn !== srOut){
+      var n = Math.round(pcm.length * srOut / srIn);
+      var out = new Float32Array(n);
+      for(var i=0;i<n;i++){
+        var x = i * srIn / srOut, i0 = Math.floor(x), f = x - i0;
+        out[i] = (pcm[i0]||0) * (1-f) + (pcm[i0+1]||0) * f;
+      }
+      data = out;
+    }
+    // 归一化 + 首尾去静音（跟服务端一致，别让识别吃亏）
+    var peak = 0;
+    for(var j=0;j<data.length;j++){ var a=Math.abs(data[j]); if(a>peak) peak=a; }
+    var gain = peak > 0.001 ? Math.min(4, 0.92/peak) : 1;
+    var buf = new ArrayBuffer(44 + data.length*2);
+    var v = new DataView(buf);
+    function str(o,s){ for(var k=0;k<s.length;k++) v.setUint8(o+k, s.charCodeAt(k)); }
+    str(0,'RIFF'); v.setUint32(4, 36 + data.length*2, true); str(8,'WAVE');
+    str(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+    v.setUint16(22,1,true); v.setUint32(24,srOut,true);
+    v.setUint32(28,srOut*2,true); v.setUint16(32,2,true); v.setUint16(34,16,true);
+    str(36,'data'); v.setUint32(40, data.length*2, true);
+    for(var m=0;m<data.length;m++){
+      var s = Math.max(-1, Math.min(1, data[m]*gain));
+      v.setInt16(44+m*2, s<0 ? s*0x8000 : s*0x7fff, true);
+    }
+    return new Blob([buf], {type:'audio/wav'});
+  }
+
+  // 试听：点录音界面上那个麦克风图标。
+  // 刻意放在这里，不放在 ⌨ 上 —— ⌨ 已经有触摸处理，
+  // 之前把长按计时器挂上去，结果和录音状态打架，卡在"松手发送"。
+  var mico = el('mico');
+  mico.addEventListener('click', function(e){
+    e.stopPropagation();
+    if(recording) stopRec();          // 正在录音就先正常收尾
+    sys(ttsInfo());
+        speak('能听到这句，就说明声音没问题。');
+    sys('听不到这句，就是手机没给网页语音合成的权限或音色。');
+  });
+  mico.addEventListener('touchstart', function(e){ e.stopPropagation(); }, {passive:true});
+
+  // 兜底：录音界面卡住时，点空白处强制收尾
+  mask.addEventListener('click', function(e){
+    // 前 800ms 内的点击一律忽略：点"说话"的那一下很容易连出第二次
+    // （iOS 的 click 有时晚到），结果刚开录就被自己停掉 ——
+    // 实测有两条失败录音只有 0.53 秒 / 0.77 秒，就是这么来的。
+    if(Date.now() < ignoreStopUntil) return;
+    if(e.target === mask) stopRec();
+  });
+
+  // ---------- 输入绑定 ----------
+  // 「按住说话」改成「点一下开始、再点一下结束」。
+  // 原来用 touchstart/touchend 按住录，在手机上必然坏：
+  // 麦克风权限弹窗会打断触摸序列，touchend 永远不触发，
+  // 于是松手停不下来，只能再点一下 —— 主人报的就是这个。
+  talk.addEventListener('click', function(e){
+    e.preventDefault();
+    if(Date.now() < ignoreStopUntil && !recording) return;
+    if(recording){ stopRec(); }
+    else if(recStarting){ sys('正在开麦，等它显示「录音中」再说'); }
+    else { startRec(); }
+  });
+  // 防止长按时浏览器弹出上下文菜单，把按钮卡住
+  talk.addEventListener('contextmenu', function(e){ e.preventDefault(); });
+
+  txtBtn.onclick = function(){
+    ttsUnlock();                     // 借这次手势解锁语音合成
+    inp.classList.toggle('show');
+    if(inp.classList.contains('show')) ti.focus();
+  };
+  ts.onclick = function(){ var t = ti.value.trim(); ti.value=''; send(t); };
+  ti.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ var t = ti.value.trim(); ti.value=''; send(t); }
+  });
+
+  // ---------- 说话长短 ----------
+  function renderLen(o){
+    if(!o) return;
+    document.querySelectorAll('#lenseg button').forEach(function(b){
+      b.classList.toggle('on', b.dataset.len === o.reply_length);
+    });
+    if(o.hint) el('lennote').textContent = o.hint + '　也可以直接说「以后说短点」。';
+  }
+
+  function loadLen(){
+    fetch(url('/settings'), {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(renderLen)
+      .catch(function(){});
+  }
+
+  document.querySelectorAll('#lenseg button').forEach(function(b){
+    b.onclick = function(){
+      fetch(url('/settings'), {method:'POST',
+                               headers:{'Content-Type':'application/json'},
+                               body: JSON.stringify({reply_length: b.dataset.len})})
+        .then(function(r){ return r.json(); })
+        .then(renderLen)
+        .catch(function(){});
+    };
+  });
+
+  // ---------- 音色 ----------
+  var voiceState = {current: null, voices: []};
+
+  function renderVoice(o){
+    if(!o) return;
+    voiceState.current = o.current || voiceState.current;
+    voiceState.voices = o.voices || voiceState.voices;
+    var sel = el('vselect');
+    if(sel.options.length <= 1 && voiceState.voices.length){
+      voiceState.voices.forEach(function(v){
+        var opt = document.createElement('option');
+        opt.value = v.provider + '|' + v.id;
+        opt.textContent = v.name + '　·　' + v.engine;
+        sel.appendChild(opt);
+      });
+    }
+    if(voiceState.current){
+      sel.value = voiceState.current.provider + '|' + voiceState.current.id;
+    }
+    if(o.current_name) el('vnote').textContent =
+      '当前：' + o.current_name + '。也可以直接说「换个台湾腔」「用晓雨的声音」。';
+  }
+
+  function loadVoice(){
+    fetch(url('/voice'), {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(renderVoice)
+      .catch(function(){});
+  }
+
+  el('vselect').onchange = function(){
+    var v = el('vselect').value;
+    if(!v) return;
+    var parts = v.split('|');
+    el('vnote').textContent = '正在切换…';
+    fetch(url('/voice'), {method:'POST',
+                          headers:{'Content-Type':'application/json'},
+                          body: JSON.stringify({provider: parts[0], id: parts[1]})})
+      .then(function(r){ return r.json(); })
+      .then(function(o){ renderVoice(o); })
+      .catch(function(e){ el('vnote').textContent = '切换失败：' + e.message; });
+  };
+
+  el('vtry').onclick = function(){
+    // 用当前选中的音色念一句，听效果
+    el('vnote').textContent = '正在合成试听…';
+    speak('欸，你回来啦。今天怎么这么晚喔？我等你好久了诶～',
+          function(){ el('vnote').textContent = '试听结束。'; });
+  };
+
+  var gear = el('gear'), panel = el('panel');
+  var mindState = {mode:'local', think:'auto'};
+  var presetsLoaded = false;
+
+  // 问厂商要真实模型列表 —— 写死的名字会过时（Kimi 的 moonshot-v1 整个系列
+  // 2026-08 就下线了），所以别信文档也别信预设，直接问服务端。
+  el('mquery').onclick = function(){
+    var note = el('mquerynote');
+    note.textContent = '正在问服务端…';
+    fetch(url('/cloudmodels'), {cache:'no-store'})
+      .then(function(r){ return r.json(); })
+      .then(function(o){
+        if(!o.ok){ note.textContent = '查不到：' + (o.error || '未知'); return; }
+        if(!o.models.length){ note.textContent = '服务端没返回模型'; return; }
+        // 做成可点的一行行，点一下直接填进模型名
+        note.innerHTML = '';
+        var head = document.createElement('div');
+        head.textContent = '服务端实际提供 ' + o.models.length + ' 个，点一个填进上面：';
+        note.appendChild(head);
+        o.models.forEach(function(m){
+          var b = document.createElement('button');
+          b.textContent = m;
+          b.style.cssText = 'display:inline-block;margin:4px 6px 0 0;' +
+            'padding:5px 10px;border-radius:8px;border:1px solid #1d3644;' +
+            'background:#0e1c24;color:#e8f2f7;font-size:12.5px';
+          b.onclick = function(){ el('mmodel').value = m; };
+          note.appendChild(b);
+        });
+      })
+      .catch(function(e){ note.textContent = '查不到：' + e.message; });
+  };
+
+  // 按当前模式只显示相关的那一组。
+  // 之前两组的输入框一直并排摆着 —— 选了"云端"下面还挂着"本地模型"，
+  // 看不出到底哪个在生效。主人直接说"你去好好整理一下"。
+  function applyModeVisibility(){
+    var isCloud = (mindState.mode === 'cloud');
+    var cg = el('cloudgroup'), lg = el('localgroup');
+    if(cg) cg.style.display = isCloud ? '' : 'none';
+    if(lg) lg.style.display = isCloud ? 'none' : '';
+  }
+
+  function renderMind(m){
+    mindState = Object.assign(mindState, m || {});
+    document.querySelectorAll('#mindseg button').forEach(function(b){
+      b.classList.toggle('on', b.dataset.mind === mindState.mode);
+    });
+    document.querySelectorAll('#thinkseg button').forEach(function(b){
+      b.classList.toggle('on', b.dataset.think === (mindState.think || 'auto'));
+    });
+    el('mindhint').textContent = mindState.status || '—';
+    applyModeVisibility();
+
+    // 预设下拉（只填一次）
+    var sel = el('mpreset');
+    if(!presetsLoaded && mindState.presets && mindState.presets.length){
+      mindState.presets.forEach(function(p){
+        var o = document.createElement('option');
+        o.value = p.id;
+        o.textContent = p.name + '  ·  ' + p.model;
+        sel.appendChild(o);
+      });
+      presetsLoaded = true;
+    }
+    if(mindState.preset) sel.value = mindState.preset;
+    if(mindState.base_url && !el('mbase').value) el('mbase').value = mindState.base_url;
+    if(mindState.model && !el('mmodel').value) el('mmodel').value = mindState.model;
+
+    // 本地模型下拉
+    var lm = el('mlocal');
+    if(lm.options.length <= 1 && mindState.local_models && mindState.local_models.length){
+      mindState.local_models.forEach(function(name){
+        var o = document.createElement('option');
+        o.value = name;
+        o.textContent = name;
+        lm.appendChild(o);
+      });
+    }
+    if(mindState.local_model) lm.value = mindState.local_model;
+    showPresetNote();
+  }
+
+  function showPresetNote(){
+    var id = el('mpreset').value;
+    var p = (mindState.presets || []).filter(function(x){ return x.id === id; })[0];
+    el('presetnote').textContent = p ? (p.note || '') : '';
+    if(p){
+      el('mbase').value = p.base_url;
+      el('mmodel').value = p.model;
+    }
+  }
+
+  function loadMind(){
+    fetch(url('/mind'), {cache:'no-store'}).then(function(r){ return r.json(); })
+      .then(renderMind).catch(function(){});
+  }
+
+  gear.onclick = function(){
+    panel.classList.add('show'); loadMind(); loadVoice(); loadLen();
+  };
+  el('mclose').onclick = function(){ panel.classList.remove('show'); };
+  el('mpreset').onchange = showPresetNote;
+
+  document.querySelectorAll('#mindseg button').forEach(function(b){
+    b.onclick = function(){
+      document.querySelectorAll('#mindseg button').forEach(function(x){
+        x.classList.remove('on');
+      });
+      b.classList.add('on');
+      mindState.mode = b.dataset.mind;
+      applyModeVisibility();          // 点了就立刻换，不用等保存
+    };
+  });
+  document.querySelectorAll('#thinkseg button').forEach(function(b){
+    b.onclick = function(){
+      document.querySelectorAll('#thinkseg button').forEach(function(x){
+        x.classList.remove('on');
+      });
+      b.classList.add('on');
+      mindState.think = b.dataset.think;
+    };
+  });
+
+  el('msave').onclick = function(){
+    var body = {mode: mindState.mode, think: mindState.think || 'auto'};
+    var pid = el('mpreset').value;
+    if(pid) body.preset = pid;
+    var b = el('mbase').value.trim();
+    var mo = el('mmodel').value.trim();
+    var k = el('mkey').value.trim();
+    var lm = el('mlocal').value;
+    if(b) body.base_url = b;
+    if(mo) body.model = mo;
+    if(k) body.api_key = k;
+    if(lm) body.local_model = lm;
+    el('msave').textContent = '保存中…';
+    fetch(url('/mind'), {method:'POST', headers:{'Content-Type':'application/json'},
+                         body: JSON.stringify(body)})
+      .then(function(r){ return r.json(); })
+      .then(function(o){
+        el('msave').textContent = '保存并切换';
+        if(o.error){ el('mindhint').textContent = '出错：' + o.error; return; }
+        el('mkey').value = '';
+        renderMind(o);
+        health();
+      })
+      .catch(function(e){
+        el('msave').textContent = '保存并切换';
+        el('mindhint').textContent = '连不上服务：' + e.message;
+      });
+  };
+
+  // ---------- 连续对话：一直听，说完自动发 ----------
+  // 为什么不按住说话：手要握着方向盘。而且每次按都要重新要权限。
+  // 这里只申请一次麦克风，流一直开着，靠音量判断「开始说」和「说完了」。
+  var live = {
+    on: false, state: 'off',   // off|calib|listening|speech|waiting|speaking
+    stream: null, ac: null, src: null, analyser: null, proc: null,
+    sr: 16000, buf: null,
+    chunks: [], speechFrames: 0, silenceFrames: 0, totalFrames: 0,
+    preroll: [], prerollMax: 12,   // 一直留最近 12 帧（≈0.5 秒）当预录
+    threshold: 0.012, calibMax: 0, calibFrames: 0,
+    FRAME_MIN: 2,      // 连续 2 帧有声音就算"开始说"（≈85ms，比原来短）
+    SIL_MIN: 22,       // 至少安静 22 帧（≈0.95 秒）才算说完
+    MAX_FRAMES: 400    // 单句最长 ≈17 秒
+  };
+
+  function hint2(t){
+    var h = el('hint2');
+    if(t){ h.textContent = t; h.classList.add('show'); }
+    else { h.classList.remove('show'); }
+  }
+
+  function liveSetState(s){
+    live.state = s;
+    var b = el('live');
+    if(!live.on){ b.classList.remove('on','rec'); return; }
+    b.classList.toggle('on', true);
+    b.classList.toggle('rec', s === 'speech');
+    if(s === 'calib')        hint2('正在适应环境噪声…');
+    else if(s === 'listening') hint2('正在听…');
+    else if(s === 'speech')    hint2('在听你说…');
+    else if(s === 'waiting')   hint2('识别中…');
+    else if(s === 'speaking')  hint2('它正在说…');
+  }
+
+  function liveStop(){
+    if(nativeLive.on){ nativeLiveStop(); return; }
+    live.on = false;
+    liveSetState('off');
+    hint2('');
+    try{ if(live.proc) live.proc.disconnect(); }catch(e){}
+    try{ if(live.src) live.src.disconnect(); }catch(e){}
+    // 注意：**不停麦克风轨道**。共用缓存的那一条流，
+    // 停了下次又得重新申请授权。只断掉音频图。
+    try{ if(live.ac) live.ac.close(); }catch(e){}
+    live.stream = live.ac = live.src = live.proc = live.analyser = null;
+  }
+
+  // ---------- 原生连续对话（APK 专用）----------
+  // 网页那条路在手机上拿不到麦克风，这里改用原生识别做循环。
+  var nativeLive = { on: false, running: false };
+
+  function nativeLiveStop(){
+    nativeLive.on = false;
+    nativeLive.running = false;
+    liveSetState('off');
+    hint2('');
+    try{ if(window.NativeASR) window.NativeASR.stop(); }catch(e){}
+    sys('连续对话关了。');
+  }
+
+  function nativeLiveKick(){
+    if(!nativeLive.on || nativeLive.running) return;
+    nativeLive.running = true;
+    liveSetState('listening');
+    hint2('正在听…（连续对话）');
+    try{ window.NativeASR.start(); }
+    catch(e){
+      nativeLive.running = false;
+      sys('连续对话启动失败：' + e.message);
+    }
+  }
+
+  // 原生识别回调里判断：这是连续模式还是单次模式
+  var _nativeOnASR = window.onNativeASR;
+  window.onNativeASR = function(text, isFinal){
+    if(nativeLive.on && isFinal){
+      nativeLive.running = false;
+      var t = (text || '').trim();
+      if(t){
+        liveSetState('speaking');
+        hint2('她正在回答…');
+        send(t);                 // 回复播完后，speak() 的 onDone 会再 kick
+      } else {
+        // 没听到内容，继续听
+        setTimeout(nativeLiveKick, 350);
+      }
+      return;
+    }
+    if(_nativeOnASR) _nativeOnASR(text, isFinal);
+  };
+
+  window.onNativeASRError = function(msg){
+    if(nativeLive.on){
+      // 连续模式里偶尔报错不该停整个循环，等一下接着听
+      sys('识中断：' + msg + '（继续听）');
+      nativeLive.running = false;
+      setTimeout(nativeLiveKick, 800);
+      return;
+    }
+    nativeRecording = false; recording = false;
+    talk.classList.remove('rec'); talk.textContent = '点一下说话';
+    mask.classList.remove('show');
+    sys('识别出错：' + msg);
+  };
+
+  function liveStart(){
+
+    // APK：有原生识别就用原生循环，别去碰网页麦克风
+    if(hasNativeASR()){
+      live.on = true;
+      nativeLive.on = true;
+      liveSetState('listening');
+      sys('连续对话开了 —— 直接说话，说完停一下它就答。再点 🎧 关掉。');
+      nativeLiveKick();
+      return;
+    }
+
+    if(live.on) return;
+    if(!micCheck()){ sys('这个地址给不了麦克风，看上面的红框。'); return; }
+    ttsUnlock();                      // 借这次点击解锁语音合成
+    getMic().then(function(stream){
+      live.stream = stream;
+      live.ac = new (window.AudioContext||window.webkitAudioContext)();
+      // 有些浏览器建出来是 suspended，必须 resume，否则一帧都不会回调
+      try{ live.ac.resume(); }catch(e){}
+      live.sr = live.ac.sampleRate;
+      live.src = live.ac.createMediaStreamSource(stream);
+      live.analyser = live.ac.createAnalyser();
+      live.analyser.fftSize = 2048;
+      live.buf = new Float32Array(live.analyser.fftSize);
+      live.proc = live.ac.createScriptProcessor(2048, 1, 1);
+      live.threshold = 0.012;
+      live.calibMax = 0; live.calibFrames = 0;
+      live.chunks = []; live.speechFrames = 0; live.silenceFrames = 0;
+
+      live.proc.onaudioprocess = function(ev){
+        if(!live.on) return;
+        var s = live.state;
+        if(s !== 'calib' && s !== 'listening' && s !== 'speech') return;
+        var data = ev.inputBuffer.getChannelData(0);
+        // 每一帧都算音量（只看时域峰值，够用且便宜）
+        var peak = 0, sum = 0;
+        for(var i=0;i<data.length;i++){
+          var v = data[i];
+          if(v > peak) peak = v;
+          if(-v > peak) peak = -v;
+          sum += v*v;
+        }
+        var rms = Math.sqrt(sum / data.length);
+        if(live.analyser){
+          try{
+            live.analyser.getFloatTimeDomainData(live.buf);
+            for(var k=0;k<live.buf.length;k+=16){
+              var a = Math.abs(live.buf[k]);
+              if(a>peak) peak = a;
+            }
+          }catch(e){}
+        }
+        volf.style.width = Math.min(100, peak*260) + '%';
+
+        // --- 适应环境噪声 ---
+        if(live.state === 'calib'){
+          live.calibFrames++;
+          if(rms > live.calibMax) live.calibMax = rms;
+          if(live.calibFrames >= 24){          // ≈1 秒
+            // 阈值取环境噪声的 2.5 倍，但不低于 0.008（太灵敏会一直触发）
+            live.threshold = Math.max(0.008, Math.min(0.06, live.calibMax * 2.5));
+            tlog('噪声阈值 ' + live.threshold.toFixed(4));
+            liveSetState('listening');
+          }
+          return;
+        }
+
+        // --- 判断说没说 ---
+        // 关键：监听状态下**一直**把最近几帧存进 preroll。
+        // 说话起头的轻声常常过不了阈值（吃字就出在这），
+        // 所以一旦判定"开始说"，把 preroll 一起拼进去。
+        if(live.state === 'listening'){
+          live.preroll.push(new Float32Array(data));
+          while(live.preroll.length > live.prerollMax) live.preroll.shift();
+
+          if(rms > live.threshold){
+            live.speechFrames++;
+            if(live.speechFrames >= live.FRAME_MIN){
+              live.chunks = live.preroll.slice();   // ← 把开头补回来
+              live.preroll = [];
+              live.totalFrames = live.chunks.length;
+              live.silenceFrames = 0;
+              liveSetState('speech');
+            }
+          } else {
+            live.speechFrames = 0;
+          }
+          return;
+        }
+
+        if(live.state === 'speech'){
+          live.chunks.push(new Float32Array(data));
+          live.totalFrames++;
+          if(rms > live.threshold * 0.75){
+            live.silenceFrames = 0;
+          } else {
+            live.silenceFrames++;
+          }
+          // 说完的判定：安静够久，而且**句子越长越有耐心**。
+          // 说一句话中间必然有停顿，固定 0.7 秒会把人打断。
+          var need = Math.max(live.SIL_MIN,
+                              Math.round(live.totalFrames * 0.30));
+          if(live.silenceFrames >= need ||
+             live.chunks.length >= live.MAX_FRAMES){
+            endUtterance();
+          }
+        }
+      };
+
+      live.src.connect(live.analyser);
+      live.analyser.connect(live.proc);
+      // 同样不能让它出声：0 增益出口 + outputBuffer 清零（见单次录音那段）
+      live.mute = live.ac.createGain();
+      live.mute.gain.value = 0;
+      live.proc.connect(live.mute);
+      live.mute.connect(live.ac.destination);
+
+      live.on = true;
+      el('live').classList.add('on');
+      liveSetState('calib');
+      sys('连续对话开了 —— 直接说话，说完停一下它就答。再点 🎧 关掉。');
+    }).catch(function(e){
+      var n = (e && e.name) || '';
+      sys('拿不到麦克风：' + n + ' ' + ((e && e.message) || ''));
+      liveStop();
+    });
+  }
+
+  function endUtterance(){
+    if(live.state !== 'speech') return;
+    var pcm = merge(live.chunks);
+    live.chunks = [];
+    live.speechFrames = 0;
+    live.silenceFrames = 0;
+    // 太短的不算（咳嗽、碰一下）
+    if(pcm.length < live.sr * 0.35){ liveSetState('listening'); return; }
+    liveSetState('waiting');
+    var wav = encodeWav(pcm, live.sr, 16000);
+    fetch(url('/asr'), {method:'POST', headers:{'Content-Type':'audio/wav'}, body:wav})
+      .then(function(r){ return r.json(); })
+      .then(function(o){
+        if(o.text && o.text.trim()){
+          send(o.text);            // send 里念完会自动回到 listening
+        } else {
+          liveSetState('listening');
+        }
+      })
+      .catch(function(e){
+        sys('识别失败：' + e.message);
+        liveSetState('listening');
+      });
+  }
+
+  el('live').onclick = function(){
+    if(live.on){
+      liveStop();
+      sys('连续对话关了。');
+    } else {
+      liveStart();
+    }
+  };
+
+  // 页面切到后台时停下（不然一直占着麦克风费电）
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden && live.on){ liveStop(); sys('切到后台，连续对话停了。'); }
+  });
+
+  // ---------- 启动 ----------
+  sys('直接跟他说话就行。要教它，就在话里说清楚：');
+  sys('「以后叫你小安」「叫我老板」「说话随便点」');
+  sys('（说完十几秒内它会自己写进档案 —— 点右上角能看见它被教成了什么样）');
+  micCheck();          // 开机就告诉用户麦克风能不能用，别等按了才知道
+  health();
+  setInterval(health, 15000);
+})();
+</script>
+</body>
+</html>
+"""
+
+
+def page_bytes():
+    # 光团作为独立一层挂上去：单独画布 + 单独 script，
+    # 光团那边出任何问题都不影响主界面。
+    from . import (orbembed, orbwebgl, sasrjs, errline, themejs, orbsetjs,
+                   layoutjs, skin, interruptjs)
+    html = orbembed.inject(PAGE, orbwebgl.JS)
+    html = sasrjs.inject(html)          # 实时识别也是独立一层
+    html = themejs.inject(html)         # 深浅主题（独立一层）
+    html = orbsetjs.inject(html)        # 光球速度/颜色/数量/特效
+    html = layoutjs.inject(html)        # 光球占上半屏、聊天区固定下方
+    html = skin.inject(html)            # 视觉皮肤（气泡/毛玻璃/渐变）
+    html = interruptjs.inject(html)     # 打断：它说话时随时能插话
+    html = errline.inject(html)         # 请求失败留痕（屏幕上一行小字）
+    return html.encode("utf-8")
+
+
+MANIFEST = {
+    "name": "心石计划",
+    "short_name": "心石计划",
+    "start_url": "/",
+    "display": "standalone",
+    "orientation": "portrait",
+    "background_color": "#08131b",
+    "theme_color": "#0b1a24",
+    "icons": [
+        {"src": "/icon.png", "sizes": "192x192", "type": "image/png"},
+        {"src": "/icon.png", "sizes": "512x512", "type": "image/png"},
+    ],
+}
+
+
+def manifest_bytes():
+    return json.dumps(MANIFEST, ensure_ascii=False).encode("utf-8")
+
+
+def icon_png(size=192):
+    """画一个简单的图标 —— 一颗发光的心石形状（六边形）。
+    不引第三方库：PNG 用 zlib + struct 手写。"""
+    import struct
+    import zlib
+
+    w = h = size
+    cx = cy = size / 2.0
+    r = size * 0.42
+
+    # 六边形顶点
+    import math
+    pts = []
+    for i in range(6):
+        a = math.pi / 180 * (60 * i - 90)
+        pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+
+    def inside(x, y):
+        # 射线法
+        n = len(pts)
+        j = n - 1
+        c = False
+        for i in range(n):
+            xi, yi = pts[i]
+            xj, yj = pts[j]
+            if ((yi > y) != (yj > y)) and \
+                    (x < (xj - xi) * (y - yi) / (yj - yi + 1e-9) + xi):
+                c = not c
+            j = i
+        return c
+
+    rows = []
+    for y in range(h):
+        row = bytearray([0])          # filter type 0
+        for x in range(w):
+            if inside(x, y):
+                # 中心偏暖，边缘偏青 —— 模拟被底座点亮的样子
+                d = math.hypot(x - cx, y - cy) / r
+                t = max(0.0, min(1.0, 1.0 - d))
+                rr = int(40 + 215 * t)
+                gg = int(160 + 70 * t)
+                bb = int(190 + 40 * t)
+                row += bytes((rr, gg, bb, 255))
+            else:
+                row += bytes((8, 19, 27, 255))
+        rows.append(bytes(row))
+    raw = b"".join(rows)
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0)
+    png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + \
+        chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b"")
+    return png
